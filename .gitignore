@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
+
+# 大批量采集数据不入库,只保留 data/samples/ 下的小样本
+data/*
+!data/samples/
