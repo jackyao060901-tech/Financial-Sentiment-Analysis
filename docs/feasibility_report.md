@@ -33,7 +33,8 @@
 
 - **入口**:讨论接口 `https://xueqiu.com/query/v1/symbol/search/status?...&symbol=SZ000001&type=11`。
 - **关键发现**:接口受**阿里云 WAF(JS 挑战)**保护。实测用 requests 先访问首页拿到 cookie(acw_tc/s/u)再请求接口,返回的仍是 WAF 挑战页(含 `aliyun_waf`/`_waf_` 字段)而非数据 —— **纯 requests 方案不可行**。
-- **可行路径**:用真实浏览器(本环境已预装 Chromium + Playwright)先加载页面通过 JS 挑战,再在同一浏览器上下文请求接口或解析 DOM。原型见 `crawlers/xueqiu.py`(`fetch_via_browser`)。
+- **可行路径**:用真实浏览器先加载页面通过 JS 挑战,再在同一浏览器上下文请求接口或解析 DOM。原型见 `crawlers/xueqiu.py`(`fetch_via_browser`,已做 Chromium 自动探测 + 代理配置)。
+- **⚠️ 本云环境的限制(实测)**:出网走策略代理。`requests` 走代理正常(能拿到雪球 WAF 挑战页),但 **headless Chromium 无法穿过该代理**——实测连 `https://example.com` 都 `ERR_CONNECTION_RESET`。因此**在当前沙盒里无法用浏览器实采雪球样本**;`crawlers/xueqiu.py` 需在**普通网络的机器**上运行(那里浏览器直连,可正常过 WAF 取样),或后续解决沙盒的浏览器-代理连通问题。
 - **能拿到的字段**:帖子 id、正文(text,HTML)、作者、发帖时间(毫秒时间戳)、阅读/评论/转发数。
 - **登录/Token**:不用登录,但**必须有浏览器执行 JS 拿到的 cookie**。
 - **反爬**:高,且对频率敏感,易封 IP,务必低频。

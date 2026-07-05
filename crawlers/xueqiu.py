@@ -19,11 +19,23 @@
 用法:
   python crawlers/xueqiu.py --symbol SZ000001 --pages 1
 """
+import os
 import re
+import glob
 import argparse
 import datetime
 
 from common import save_csv
+
+
+def _find_chromium():
+    """自动定位环境预装的 Chromium 可执行文件(避免 playwright 版本不匹配去下载)。"""
+    for pat in ("/opt/pw-browsers/chromium-*/chrome-linux/chrome",
+                "/opt/pw-browsers/chromium_headless_shell-*/chrome-linux/headless_shell"):
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
 
 # type=11 为讨论帖;symbol 形如 SZ000001 / SH600519
 API = ("https://xueqiu.com/query/v1/symbol/search/status"
@@ -77,11 +89,19 @@ def fetch_via_browser(symbol="SZ000001", pages=1):
     rows = []
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=UA)
+        exe = _find_chromium()
+        # 若环境走代理(如云端沙盒),浏览器需显式配置代理,否则连不上外网
+        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        launch_kw = {"headless": True, "executable_path": exe}
+        if proxy_url:
+            launch_kw["proxy"] = {"server": proxy_url}
+        browser = p.chromium.launch(**launch_kw)
+        # ignore_https_errors:代理做 TLS 拦截,证书链浏览器默认不信任,这里忽略
+        ctx = browser.new_context(user_agent=UA, ignore_https_errors=True)
         page = ctx.new_page()
         # 先访问首页,让浏览器执行 JS 挑战、拿到有效 cookie
-        page.goto("https://xueqiu.com/", wait_until="networkidle", timeout=30000)
+        page.goto("https://xueqiu.com/", wait_until="domcontentloaded", timeout=40000)
+        page.wait_for_timeout(3000)  # 给 WAF 的 JS 挑战留出执行时间
         for pg in range(1, pages + 1):
             resp = page.request.get(
                 API.format(symbol=symbol, page=pg),
