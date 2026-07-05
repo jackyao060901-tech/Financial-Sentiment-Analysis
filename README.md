@@ -25,6 +25,7 @@
 | 东方财富个股新闻 | ✅ | 公开 JSON + 详情页 | ✗ | 中低(资讯) | 已跑通 |
 | 同花顺·个股资讯 | ✅ | 公开 JSON | ✗ | 中低(资讯) | 已跑通 |
 | 富途牛牛·资讯 | ✅ | 内嵌 JSON(仅标题) | ✗ | 中低(资讯) | 原型 |
+| 腾讯股票·资讯 | ✅ | 公开接口(仅标题) | ✗ | 中低(资讯) | 原型 |
 | 百度贴吧 | ✅ | App 接口 + 签名 | ✗ | **低**(个股吧多为公司/产品话题) | 已跑通,但价值低 |
 | 雪球 | ⚠️ | 真浏览器过阿里云 WAF | 浏览器 Cookie | 高 | 原型(需本地跑) |
 | 同花顺·社区帖子 | ⚠️ | Vue SPA + 签名接口 | 需浏览器/逆向 | 中 | 暂缓 |
@@ -51,6 +52,7 @@ crawlers/                     采集脚本(每平台一个,均已实测)
   taoguba.py                    淘股吧(个股页 + 文章页)
   baidu_tieba.py                百度贴吧(App 接口 + 签名;能爬但内容跑偏)
   futu_news.py                  富途牛牛资讯(内嵌 JSON,仅标题)
+  tencent_news.py               腾讯股票资讯(公开接口,仅标题)
   xueqiu.py                     雪球原型(Playwright 过 WAF,需本地跑)
 scripts/
   collect_samples.py            一键用统一股票池重建全部平台样本(可复现)
@@ -106,6 +108,9 @@ python crawlers/baidu_tieba.py --bar 平安银行 --code 000001 --rn 20
 
 # 富途牛牛资讯(内嵌 JSON)
 python crawlers/futu_news.py --code 000001
+
+# 腾讯股票资讯(公开接口,symbol 带交易所前缀)
+python crawlers/tencent_news.py --symbol sz000001 --type 1
 
 # 雪球(需真浏览器过 WAF,本云沙盒跑不了,需本地运行)
 python crawlers/xueqiu.py --symbol SZ000001 --pages 1
