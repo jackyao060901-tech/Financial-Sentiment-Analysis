@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawlers"))
 
 from common import save_csv  # noqa: E402
-import eastmoney_guba, sina_finance, ths_news, taoguba, eastmoney_news  # noqa: E402
+import eastmoney_guba, sina_finance, ths_news, taoguba, eastmoney_news, baidu_tieba  # noqa: E402
 
 # 股票池:银行 / 白酒 / 新能源(创业板)/ 安防 / 保险(沪大盘)
 STOCKS = [
@@ -82,6 +82,18 @@ def collect_eastmoney_news():
     return len(rows)
 
 
+def collect_tieba():
+    # 注意:贴吧个股同名吧多为公司/产品话题(招聘/广告),股票舆情价值低——
+    # 采样仅作"能爬但研究价值低"的证据留存。kw 用公司名(吧名)。
+    rows = []
+    for code, _, name in STOCKS:
+        r = baidu_tieba.crawl(name, code, rn=PER_STOCK)
+        print(f"  百度贴吧 {name}吧 ({code}): {len(r)}")
+        rows += r
+    save_csv(rows, "data/samples/tieba_sample.csv")
+    return len(rows)
+
+
 def main():
     totals = {}
     for name, fn in [
@@ -90,6 +102,7 @@ def main():
         ("同花顺资讯", collect_ths),
         ("淘股吧", collect_taoguba),
         ("东财新闻", collect_eastmoney_news),
+        ("百度贴吧", collect_tieba),
     ]:
         print(f"== 采集 {name} ==")
         try:
