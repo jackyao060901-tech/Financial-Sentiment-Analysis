@@ -4,7 +4,9 @@
 即使某平台拿不到某个字段,也保留列、留空,不要改结构。
 """
 import os
+import re
 import csv
+import html
 import time
 import random
 import requests
@@ -59,6 +61,18 @@ def polite_get(session, url, referer=None, timeout=20,
     resp = session.get(url, timeout=timeout, **kwargs)
     time.sleep(random.uniform(min_delay, max_delay))
     return resp
+
+
+def clean_text(raw):
+    """通用文本清洗:去 HTML 标签、解码实体(&nbsp; &gt; 等)、压缩空白。
+
+    只做"清洗"(让文本干净可读),不做分词/情感等分析处理。
+    """
+    if not raw:
+        return ""
+    text = re.sub(r"<[^>]+>", "", raw)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def save_csv(rows, path):
