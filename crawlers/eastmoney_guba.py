@@ -13,6 +13,7 @@
   python crawlers/eastmoney_guba.py --code 600519 --pages 2 --with-body
 """
 import re
+import html
 import json
 import argparse
 import datetime
@@ -79,16 +80,38 @@ def parse_page(html, code):
     return rows
 
 
+def _clean_html(raw):
+    """去 HTML 标签、解码 HTML 实体(&nbsp; &gt; 等)、压缩空白,得到纯文本正文。
+
+    这里只做"清洗"(让文本可读),不做任何分析处理。
+    像 $平安银行(SZ000001)$ 这类股票标记、[买入] 表情占位符暂时保留原样,
+    是否清洗留到后续分析阶段按需要决定。
+    """
+    text = re.sub(r"<[^>]+>", "", raw)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def fetch_body(session, code, post_id):
-    """请求详情页,尽力抽出正文纯文本。"""
+    """请求详情页,抽出正文纯文本。
+
+    正文在详情页里是 JSON 字段 "post_content":"<...转义的HTML...>",
+    优先解析它;拿不到再退回按 id=newscontent / class=newstext 的容器抽取。
+    """
     url = f"{BASE}/news,{code},{post_id}.html"
     r = polite_get(session, url, referer=BASE + "/")
-    m = (re.search(r'<div[^>]*class="newstext"[^>]*>(.*?)</div>', r.text, re.S)
-         or re.search(r'<div[^>]*id="post_content"[^>]*>(.*?)</div>', r.text, re.S))
-    if not m:
-        return ""
-    text = re.sub(r"<[^>]+>", "", m.group(1))
-    return re.sub(r"\s+", " ", text).strip()
+    # 方式1:JSON 字段 post_content(最稳)
+    m = re.search(r'"post_content"\s*:\s*"((?:[^"\\]|\\.)*)"', r.text)
+    if m:
+        try:
+            raw = json.loads('"' + m.group(1) + '"')  # 反转义
+            return _clean_html(raw)
+        except json.JSONDecodeError:
+            pass
+    # 方式2:HTML 容器兜底
+    m = (re.search(r'id="newscontent"[^>]*>(.*?)</div>', r.text, re.S)
+         or re.search(r'class="newstext[^"]*"[^>]*>(.*?)</div>', r.text, re.S))
+    return _clean_html(m.group(1)) if m else ""
 
 
 def crawl(code, pages=3, with_body=False):
