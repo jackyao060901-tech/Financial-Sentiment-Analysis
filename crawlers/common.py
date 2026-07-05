@@ -50,17 +50,27 @@ def make_session(extra_headers=None):
 
 
 def polite_get(session, url, referer=None, timeout=20,
-               min_delay=1.0, max_delay=2.5, **kwargs):
-    """发一次 GET,并在之后随机 sleep 一小段时间做频率控制。
+               min_delay=1.0, max_delay=2.5, retries=3, **kwargs):
+    """发一次 GET,失败自动重试,并在之后随机 sleep 做频率控制。
 
-    频率控制很重要:既是对目标站的礼貌,也能降低被反爬封 IP 的概率。
+    - 频率控制:既是对目标站的礼貌,也能降低被反爬封 IP 的概率。
+    - 重试:网络/代理偶发抖动(如 DNS 瞬时失败)时,指数退避重试,避免整轮采集崩溃。
     """
     if referer:
         headers = kwargs.setdefault("headers", {})
         headers.setdefault("Referer", referer)
-    resp = session.get(url, timeout=timeout, **kwargs)
-    time.sleep(random.uniform(min_delay, max_delay))
-    return resp
+    last_err = None
+    for attempt in range(retries):
+        try:
+            resp = session.get(url, timeout=timeout, **kwargs)
+            time.sleep(random.uniform(min_delay, max_delay))
+            return resp
+        except requests.RequestException as e:
+            last_err = e
+            wait = 2 ** attempt  # 1s, 2s, 4s
+            print(f"[retry] 请求失败({type(e).__name__}),{wait}s 后重试:{url[:60]}")
+            time.sleep(wait)
+    raise last_err
 
 
 def clean_text(raw):
