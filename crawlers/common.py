@@ -40,21 +40,31 @@ FIELDS = [
 ]
 
 
-def make_session(extra_headers=None):
-    """创建一个带默认浏览器头的 requests 会话。"""
+def make_session(extra_headers=None, proxies=None):
+    """创建一个带默认浏览器头的 requests 会话。
+
+    规模化:传 proxies={"http": "...", "https": "..."} 即让本会话走固定代理;
+    要做 IP 池轮换,见 polite_get 的 proxy_pool 参数。
+    """
     s = requests.Session()
     s.headers.update(DEFAULT_HEADERS)
     if extra_headers:
         s.headers.update(extra_headers)
+    if proxies:
+        s.proxies.update(proxies)
     return s
 
 
 def polite_get(session, url, referer=None, timeout=20,
-               min_delay=1.0, max_delay=2.5, retries=3, **kwargs):
+               min_delay=1.0, max_delay=2.5, retries=3,
+               proxy_pool=None, **kwargs):
     """发一次 GET,失败自动重试,并在之后随机 sleep 做频率控制。
 
-    - 频率控制:既是对目标站的礼貌,也能降低被反爬封 IP 的概率。
+    - 频率控制:既是对目标站的礼貌,也能降低被反爬封 IP 的概率(规模化第一层防护)。
     - 重试:网络/代理偶发抖动(如 DNS 瞬时失败)时,指数退避重试,避免整轮采集崩溃。
+    - IP 池(规模化):`proxy_pool` 传一个"无参可调用对象",每次尝试调用它取一个
+      proxies dict(如 {"https": "http://ip:port"});被封时下一次重试自动换 IP。
+      例:polite_get(s, url, proxy_pool=my_pool.get)。默认不传 = 用会话自身代理。
     """
     if referer:
         headers = kwargs.setdefault("headers", {})
@@ -62,6 +72,8 @@ def polite_get(session, url, referer=None, timeout=20,
     last_err = None
     for attempt in range(retries):
         try:
+            if proxy_pool is not None:
+                kwargs["proxies"] = proxy_pool()   # 每次取一个 IP,支持轮换
             resp = session.get(url, timeout=timeout, **kwargs)
             time.sleep(random.uniform(min_delay, max_delay))
             return resp

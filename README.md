@@ -126,11 +126,13 @@ python scripts/collect_samples.py
 
 ---
 
-## 五、合规与礼貌
+## 五、合规、礼貌与规模化
 
 - 所有请求带**随机延时 + 失败重试**(`common.polite_get`),控制频率、不影响目标站。
-- 数据**仅用于研究/课程用途**。
-- 凭据(如需)从环境变量读取,**不在源码硬编码**。
+- 数据**仅用于研究/课程用途**;凭据(如需)从环境变量读取,**不在源码硬编码**。
+- **规模化就绪**:代码已预留 IP 池接口——`make_session(proxies=...)` 走固定代理,
+  `polite_get(..., proxy_pool=pool.get)` 每次取一个 IP 轮换。防封分层方案(限速→增量→IP 轮换→分布式 + DB 去重)见
+  [`docs/feasibility_report.md` 附录 D](docs/feasibility_report.md)。
 
 ## 六、路线图
 
