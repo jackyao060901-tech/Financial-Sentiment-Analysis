@@ -226,7 +226,37 @@ python scripts/collect_samples.py     # 一键重建 data/samples/ 下全部平�
 - **方法二 · 纯 requests = 不通**:不执行 JS,只拿到 WAF 挑战页(含 `aliyun_waf`/`_waf_`)。
 - **方法三 · 无浏览器执行/逆向 WAF = 实测跑不通、不推荐**:裸 Node 报 `document is not defined`;jsdom 只跑一半、算不出放行 cookie、卡在需真实页面跳转;新版 WAF 靠浏览器指纹+导航,逆向极脆弱(反爬军备竞赛)。
 
-# 附录 B:各平台解析技术细节
+# 附录 B:各平台采集手法(完整技术记录)
+
+## B.1 核心方法论
+
+对每个平台统一流程:**侦察 → 找最不易碎的数据入口 → 写爬虫映射统一字段 → 真跑验证 → 记录结论**。两条心法:
+1. **优先找"内嵌数据"**:HTML/SSR 页面里常把数据写进 `var xxx={...}` / `__INITIAL_STATE__` / `__NUXT__`,直接解析 JSON,比解析会变的渲染 DOM 稳得多。
+2. **换渠道破封**:同一平台换个入口就能绕过封锁——**Web→App 接口**(贴吧)、**页面→内嵌状态**(富途)、**页面→公开接口**(腾讯/同花顺)。
+
+侦察清单(每个平台先看这几项):**站点通不通 / 静态 HTML 还是 SPA / 有无内嵌 JSON / 要不要登录·token·签名 / 反爬多硬(403·503·WAF)**。
+
+## B.2 关键手法总表(一览)
+
+| 平台 | 入口/接口 | 关键手法 | 正文来源 | 登录·签名 | 结论 |
+|------|------|------|------|:---:|:---:|
+| 东财股吧 | `guba.eastmoney.com/list,{code}.html` | 内嵌 `var article_list` JSON,大括号配平 | 详情页 `post_content` | 否 | ✅ 首选 |
+| 东财新闻 | `np-listapi…getListInfo` | 公开 JSON | 详情页 `ContentBody` | 否 | ✅ |
+| 新浪股吧 | `guba.sina.com.cn/?s=bar` | **GBK** 静态表格,按 `<tr>` 正则 | 详情页 `thread_content` | 否 | ✅ |
+| 同花顺资讯 | `news.10jqka.com.cn/tapp/news…` | 公开 JSON,摘要内嵌 | 内嵌 `digest` | 否 | ✅ |
+| 淘股吧 | `taoguba.com.cn/quotes/{symbol}` | `related-subject`→文章页容器 | `article-text` | 否 | ✅ |
+| 韭研公社 | `/a/{id}` | Nuxt `__NUXT__`(UTF-8)单篇解析 | `__NUXT__.content` | 否 | ✅ 高价值 |
+| 百度贴吧 | `tiebac.baidu.com/c/f/frs/page` | Web 403→**App 接口+公开签名** `tiebaclient!!!` | `abstract` | 签名(公开) | ✅ 但内容跑偏 |
+| 富途 | `futunn.com/stock/{code}-{mkt}` | 内嵌 `__INITIAL_STATE__.stock_news` | 详情页 `origin_content`(部分) | 否 | ✅ 部分正文 |
+| 腾讯 | `web.ifzq.gtimg.cn/appstock/news/info/search` | 公开接口(调对 `type` 参数) | React SPA,未定位 | 否 | ✅ 仅标题 |
+| 同花顺社区 | `t.10jqka.com.cn/guba/{code}` | Vue SPA + axios + `md5`(疑签名) | — | 疑签名/浏览器 | ⚠️ 暂缓 |
+| 雪球 | `xueqiu.com/query/v1/symbol/search/status` | **阿里云 WAF(JS-VM)**,需真浏览器 | — | 浏览器 cookie | ⚠️ 需本地 |
+| 微博 | `m.weibo.cn/api/container/getIndex` | 访客 cookie 可拿,搜索需登录 | — | 需登录 | ⚠️ 暂缓 |
+| 财联社 | `cls.cn/v3/depth…` | 签名接口(errno 10012 签名错误) | — | 需签名 | ⚠️ 暂缓 |
+| 老虎 | `laohu8.com` | 个股接口 `contract not exist` | — | — | ❌ 不覆盖 A 股 |
+| 金融界/和讯 | — | 本云环境代理连接失败 | — | — | ❌ 不可达 |
+
+## B.3 逐平台技术细节
 
 - **东方财富股吧**:列表页 `guba.eastmoney.com/list,{code}.html` 内嵌 `var article_list={...}`(每页约 80 条,大括号配平提取);字段含 `post_title/post_publish_time(带年)/post_click_count(阅读)/post_comment_count/bullish_bearish` 等;正文在详情页 `"post_content"` JSON 字段。
 - **东方财富个股新闻**:`np-listapi.eastmoney.com/comm/web/getListInfo?...&mTypeAndCode={mkt}.{code}&type=1`(沪市 6 开头 mkt=1,深市=0);正文在详情页 `id="ContentBody"`。
@@ -236,7 +266,9 @@ python scripts/collect_samples.py     # 一键重建 data/samples/ 下全部平�
 - **淘股吧**:个股页 `taoguba.com.cn/quotes/{symbol}` 的 `related-subject` 取帖 → 文章页 `article-tittle`/`article-text p_coten`/`article-data`(作者/时间/浏览/评论);注意 `www.taoguba.com.cn` 证书异常,用主域。
 - **微博**:`passport.weibo.com/visitor/genvisitor`→`incarnate` 可拿访客 SUB/SUBP,但 `m.weibo.cn/api/container/getIndex` 个股搜索返回 `{"ok":-100,url:".../sso/signin"}`(需登录)。
 - **百度贴吧**:Web 端 403(疑封数据中心 IP);改用 App 接口 `tiebac.baidu.com/c/f/frs/page`,参数按 key 排序拼 `k=v` 再接公开常量 `tiebaclient!!!` 取 MD5 大写作 `sign`,POST 即得 `thread_list`(字段 tid/title/view_num/reply_num/agree_num/share_num/abstract/create_time)。
-- **富途牛牛**:个股页 `www.futunn.com/stock/{code}-{SZ/SH}` 内嵌 `window.__INITIAL_STATE__`,`stock_news.list` 为个股资讯(id/title/time/url/source);列表无正文摘要,正文需再请求 `news.futunn.com/post/{id}`(1MB 重型页)。
+- **富途牛牛**:个股页 `www.futunn.com/stock/{code}-{SZ/SH}` 内嵌 `window.__INITIAL_STATE__`,`stock_news.list` 为个股资讯(id/title/time/url/source);列表无摘要,正文去详情页 `news.futunn.com/post/{id}` 取 `class="inner origin_content"`——但该容器只命中标准文章,快讯/董秘回复等结构不同,实采约 5/30 带正文。
+- **腾讯股票**:公开接口 `web.ifzq.gtimg.cn/appstock/news/info/search?symbol={sz/sh+code}&page={n}&n={num}&type={t}`(`type` 1=研报,2/3=新闻),返回 `data.data`(id/title/time/url/src),无登录无签名;正文在 `gu.qq.com` 的 React SPA(`id="root"`),内容 API 未定位,故为标题级。
+- **韭研公社**:游资/散户研究社区。首页 HTML 里取文章链接 `/a/{id}`;文章页是 **Nuxt SSR**,数据在内嵌 `window.__NUXT__` 里,**须按 UTF-8 读取**(否则中文乱码),单篇一页可干净取 `title`/`content`(完整正文,750~7000 字)/`create_time`/`nickname`。目前取综合信息流,非按单股过滤。
 
 # 附录 C:项目产出物清单(交付物一览)
 
