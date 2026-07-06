@@ -38,7 +38,7 @@ def crawl_stock(session, code, name):
     seen = set()
     rows = []
     fails = 0
-    stop_reason = "达到 2020 起点"
+    stop_reason = f"达到页数上限 {MAX_PAGES} 页(未及 2020,可提高上限或换 IP 续采)"
     last_page = 0
     for pg in range(1, MAX_PAGES + 1):
         seg = "" if pg == 1 else f"_{pg}"

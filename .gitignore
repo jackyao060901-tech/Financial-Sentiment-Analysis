@@ -9,3 +9,6 @@ venv/
 # 大批量采集数据不入库,只保留 data/samples/ 下的小样本
 data/*
 !data/samples/
+
+# ST 专项数据(小,保留)
+!data/st_since2020/
