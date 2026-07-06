@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawlers"))
 
 from common import save_csv  # noqa: E402
 import eastmoney_guba, sina_finance, ths_news, taoguba, eastmoney_news, baidu_tieba  # noqa: E402
+import futu_news, jiuyan  # noqa: E402
 
 # 股票池:银行 / 白酒 / 新能源(创业板)/ 安防 / 保险(沪大盘)
 STOCKS = [
@@ -82,6 +83,24 @@ def collect_eastmoney_news():
     return len(rows)
 
 
+def collect_futu():
+    rows = []
+    for code, _, name in STOCKS:
+        r = futu_news.crawl(code, with_body=True)
+        print(f"  富途资讯 {code} {name}: {len(r)}")
+        rows += r
+    save_csv(rows, "data/samples/futu_news_sample.csv")
+    return len(rows)
+
+
+def collect_jiuyan():
+    # 综合(市场级)游资/研究信息流,非按单股;一次抓一批
+    rows = jiuyan.crawl(limit=25)
+    print(f"  韭研公社(综合信息流): {len(rows)}")
+    save_csv(rows, "data/samples/jiuyan_sample.csv")
+    return len(rows)
+
+
 def collect_tieba():
     # 注意:贴吧个股同名吧多为公司/产品话题(招聘/广告),股票舆情价值低——
     # 采样仅作"能爬但研究价值低"的证据留存。kw 用公司名(吧名)。
@@ -102,6 +121,8 @@ def main():
         ("同花顺资讯", collect_ths),
         ("淘股吧", collect_taoguba),
         ("东财新闻", collect_eastmoney_news),
+        ("富途资讯", collect_futu),
+        ("韭研公社", collect_jiuyan),
         ("百度贴吧", collect_tieba),
     ]:
         print(f"== 采集 {name} ==")

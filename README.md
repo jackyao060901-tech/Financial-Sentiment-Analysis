@@ -22,6 +22,7 @@
 | **东方财富股吧** | ✅ | 列表页内嵌 JSON | ✗ | **高** | 已跑通(首选) |
 | 淘股吧 | ✅ | 个股页 + 文章页 | ✗ | 较高 | 已跑通 |
 | 新浪财经股吧 | ✅ | GBK 静态页 + 详情页 | ✗ | 中低(活跃度低) | 已跑通 |
+| 韭研公社 | ✅ | Nuxt SSR 内嵌 JSON | ✗ | **高**(游资/散户深度研究) | 已跑通 |
 | 东方财富个股新闻 | ✅ | 公开 JSON + 详情页 | ✗ | 中低(资讯) | 已跑通 |
 | 同花顺·个股资讯 | ✅ | 公开 JSON | ✗ | 中低(资讯) | 已跑通 |
 | 富途牛牛·资讯 | ✅ | 内嵌 JSON(仅标题) | ✗ | 中低(资讯) | 原型 |
@@ -50,6 +51,7 @@ crawlers/                     采集脚本(每平台一个,均已实测)
   sina_finance.py               新浪财经股吧(GBK 静态页 + 详情页)
   ths_news.py                   同花顺个股资讯(公开 JSON,摘要内嵌)
   taoguba.py                    淘股吧(个股页 + 文章页)
+  jiuyan.py                     韭研公社(游资研究社区,SSR 内嵌 JSON,研究价值高)
   baidu_tieba.py                百度贴吧(App 接口 + 签名;能爬但内容跑偏)
   futu_news.py                  富途牛牛资讯(内嵌 JSON,仅标题)
   tencent_news.py               腾讯股票资讯(公开接口,仅标题)
@@ -102,6 +104,9 @@ python crawlers/eastmoney_news.py --code 000001 --count 10 --with-body
 
 # 淘股吧(个股页 + 文章页)
 python crawlers/taoguba.py --symbol sz000001
+
+# 韭研公社(游资研究社区,综合信息流)
+python crawlers/jiuyan.py --limit 20
 
 # 百度贴吧(App 接口;--bar 用公司名/吧名)
 python crawlers/baidu_tieba.py --bar 平安银行 --code 000001 --rn 20

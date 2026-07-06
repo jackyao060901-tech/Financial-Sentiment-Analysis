@@ -54,7 +54,17 @@ def _ts(v):
         return ""
 
 
-def crawl(code):
+def fetch_body(session, url):
+    """富途文章正文在详情页 `class="inner origin_content ..."` 容器里。"""
+    if not url:
+        return ""
+    r = polite_get(session, url, referer="https://www.futunn.com/")
+    m = re.search(r'class="inner origin_content[^"]*"[^>]*>(.*?)</div>\s*</div>', r.text, re.S) \
+        or re.search(r'class="inner origin_content[^"]*"[^>]*>(.*?)</div>', r.text, re.S)
+    return clean_text(m.group(1)) if m else ""
+
+
+def crawl(code, with_body=False):
     session = make_session()
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     url = STOCK_URL.format(code=code, mkt=_market(code))
@@ -67,12 +77,16 @@ def crawl(code):
     print(f"[内嵌] 解析到 {len(lst)} 条资讯")
     rows = []
     for it in lst:
+        url = it.get("url", "")
+        content = clean_text(it.get("abstract", ""))
+        if with_body and not content and url:
+            content = fetch_body(session, url)
         rows.append({
             "platform": "futu_news",
             "stock_code": code,
             "post_id": it.get("id"),
             "title": clean_text(it.get("title", "")),
-            "content": clean_text(it.get("abstract", "")),
+            "content": content,
             "author": it.get("source", ""),
             "author_id": "",
             "publish_time": _ts(it.get("time")),
@@ -91,10 +105,11 @@ def crawl(code):
 def main():
     ap = argparse.ArgumentParser(description="富途牛牛个股资讯采集原型")
     ap.add_argument("--code", default="000001", help="纯数字代码,如 000001 / 600519")
+    ap.add_argument("--with-body", action="store_true", help="抓正文(去详情页,较慢)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
-    rows = crawl(a.code)
+    rows = crawl(a.code, a.with_body)
     out = a.out or f"data/samples/futu_news_{a.code}_sample.csv"
     save_csv(rows, out)
     print(f"已保存 {len(rows)} 条 -> {out}")
