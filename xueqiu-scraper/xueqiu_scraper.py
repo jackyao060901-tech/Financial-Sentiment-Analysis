@@ -123,12 +123,38 @@ def oldest_id(db, symbol):
     return row[0] if row else ""
 
 
-def scrape_stock(db, code, name, since, proxy, delay=(1.5, 3.0)):
-    """Playwright 过 WAF,再用时间线接口 + max_id 游标翻到 since。需本地/住宅 IP。"""
+def _extract_lists(obj, bag):
+    """从任意 JSON 里递归掏出看起来像"帖子列表"的数组(元素含 created_at)。"""
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _extract_lists(v, bag)
+    elif isinstance(obj, list):
+        if obj and isinstance(obj[0], dict) and ("created_at" in obj[0] or "id" in obj[0]):
+            bag.append(obj)
+        for v in obj:
+            _extract_lists(v, bag)
+
+
+def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5)):
+    """浏览器抓取(最稳方式):打开个股讨论页过 WAF,**滚动页面触发无限加载**,
+    同时**拦截页面自己发出的所有 XHR 响应**,从中掏出帖子入库,直到回溯到 since。
+    这样不依赖猜某个接口——网页能滚到哪年,就抓到哪年。需本地/住宅 IP。
+    另外也顺带用时间线游标接口试翻(双保险)。
+    """
     from playwright.sync_api import sync_playwright
     symbol = prefix(code)
-    max_id = oldest_id(db, symbol)   # 断点续采
-    total_new = 0
+    total_new = [0]
+    oldest_seen = ["9999-99-99"]
+
+    def ingest(items):
+        rows = [parse_post(it, symbol, name) for it in items
+                if isinstance(it, dict) and it.get("id") and it.get("created_at")]
+        if rows:
+            total_new[0] += save_rows(db, rows)
+            o = min((r["created_at"] for r in rows if r["created_at"]), default="")
+            if o and o < oldest_seen[0]:
+                oldest_seen[0] = o
+
     with sync_playwright() as p:
         launch = {"headless": True}
         if proxy:
@@ -136,39 +162,76 @@ def scrape_stock(db, code, name, since, proxy, delay=(1.5, 3.0)):
         browser = p.chromium.launch(**launch)
         ctx = browser.new_context(user_agent=UA, ignore_https_errors=True)
         page = ctx.new_page()
-        # 1) 打开个股页,过 WAF(浏览器执行 JS 挑战,拿到 acw_sc__v2 等 cookie)
+
+        # 拦截:任何 xueqiu 的帖子类 XHR 响应,都掏出列表入库
+        def on_response(resp):
+            u = resp.url
+            if "xueqiu.com" in u and any(k in u for k in ("timeline", "search/status", "/statuses/")):
+                try:
+                    bag = []
+                    _extract_lists(resp.json(), bag)
+                    for lst in bag:
+                        ingest(lst)
+                except Exception:
+                    pass
+        page.on("response", on_response)
+
+        # 1) 打开个股讨论页,过 WAF
         page.goto(f"https://xueqiu.com/S/{symbol}", wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(4000)
-        if max_id:
-            print(f"  [{name}] 断点续采,从 max_id={max_id} 继续", flush=True)
-        # 2) 用浏览器上下文(带过 WAF 的 cookie)顺着时间线游标往前翻
-        empty = 0
-        while True:
-            url = TIMELINE.format(symbol=symbol) + (f"&max_id={max_id}" if max_id else "")
-            resp = page.request.get(url, headers={"Referer": f"https://xueqiu.com/S/{symbol}"})
+        page.wait_for_timeout(5000)
+
+        # 2) 一边用时间线游标接口翻(快),一边滚动页面(兜底);谁能往前走都收下
+        deadline = time.time() + max_minutes * 60
+        max_id = oldest_id(db, symbol)
+        stagnant = 0
+        while time.time() < deadline:
+            before = total_new[0]
+            oldest_before = oldest_seen[0]
+            # (a) 游标接口
             try:
-                d = resp.json()
+                url = TIMELINE.format(symbol=symbol) + (f"&max_id={max_id}" if max_id else "")
+                d = page.request.get(url, headers={"Referer": f"https://xueqiu.com/S/{symbol}"}).json()
+                lst = d.get("list") or []
+                if lst:
+                    ingest(lst)
+                    max_id = lst[-1].get("id") or max_id
             except Exception:
-                print(f"  [{name}] 返回非 JSON(WAF 未过/需登录),停"); break
-            lst = d.get("list") or []
-            if not lst:
-                empty += 1
-                if empty >= 3:
-                    print(f"  [{name}] 无更多帖子(到底),停"); break
-                page.wait_for_timeout(3000); continue
-            empty = 0
-            rows = [parse_post(it, symbol, name) for it in lst]
-            total_new += save_rows(db, rows)
-            oldest = min((r["created_at"] for r in rows if r["created_at"]), default="")
-            print(f"  [{name}] +{len(rows)} 累计新{total_new} 最旧{oldest[:10]}", flush=True)
-            max_id = lst[-1].get("id")
-            if oldest and oldest[:10] < since:
+                pass
+            # (b) 滚动页面,触发它自己的无限加载(响应被 on_response 收走)
+            try:
+                page.mouse.wheel(0, 24000)
+            except Exception:
+                pass
+            page.wait_for_timeout(int(random.uniform(*delay) * 1000))
+            print(f"  [{name}] 累计新{total_new[0]} 最旧{oldest_seen[0][:10]}", flush=True)
+            if oldest_seen[0] != "9999-99-99" and oldest_seen[0][:10] < since:
                 print(f"  [{name}] ✅ 已回溯到 {since},完成"); break
-            if not max_id:
-                break
-            page.wait_for_timeout(int(random.uniform(*delay) * 1000))  # 拟人间隔
+            # 连续没有新数据 & 最旧没变早 → 到底/被限,停
+            if total_new[0] == before and oldest_seen[0] == oldest_before:
+                stagnant += 1
+                if stagnant >= 6:
+                    print(f"  [{name}] 连续无进展(到底/被限),停在 {oldest_seen[0][:10]}"); break
+            else:
+                stagnant = 0
         browser.close()
-    return total_new
+    return total_new[0], oldest_seen[0][:10]
+
+
+def quick_test(code, since, proxy):
+    """本地自测:对一只股票跑最多 90 秒,报告能回溯到哪天——用来先确认能不能到 2020。"""
+    import tempfile
+    name = dict(STOCKS).get(code, code)
+    db = db_connect(os.path.join(tempfile.gettempdir(), "xq_test.db"))
+    print(f"== 自测 {name}({code}):跑 ~90 秒看能回溯到哪天 ==")
+    new, oldest = scrape_stock(db, code, name, since, proxy, max_minutes=1.5)
+    print(f"\n自测结果:{name} 采到 {new} 条,最旧 {oldest}")
+    if oldest <= since:
+        print(f"✅ 能翻过 {since} —— 这套可以爬到 2020,放心长跑。")
+    elif oldest < "2023-01-01":
+        print(f"🟡 翻过了 2023(到 {oldest}),说明能突破 1000 条上限、在往 2020 走 —— 可长跑。")
+    else:
+        print(f"❌ 只到 {oldest},没能突破近端 —— 浏览器也被限在 ~1000 条。\n"
+              f"   退路:①用登录后的雪球 cookie;②确认该股在雪球是否真有 2020 的帖(可能本就没有)。")
 
 
 def export_csv(db_path, out_dir="data"):
@@ -188,17 +251,21 @@ def main():
     ap.add_argument("--since", default="2020-01-01", help="回溯到的日期")
     ap.add_argument("--proxy", default=None, help="可选代理,如 http://ip:port")
     ap.add_argument("--export", action="store_true", help="只导出 CSV")
+    ap.add_argument("--test", metavar="CODE", default=None,
+                    help="本地自测:先跑一只股票~90秒,看能否翻过2023到2020(强烈建议长跑前先跑)")
     a = ap.parse_args()
 
     os.makedirs(os.path.dirname(a.db) or ".", exist_ok=True)
     if a.export:
         export_csv(a.db); return
+    if a.test:
+        quick_test(a.test, a.since, a.proxy); return
     db = db_connect(a.db)
     for code, name in STOCKS:
         print(f"== {name}({code}) 深爬到 {a.since} ==", flush=True)
         try:
-            got = scrape_stock(db, code, name, a.since, a.proxy)
-            print(f"  -> +{got} 新增", flush=True)
+            got, oldest = scrape_stock(db, code, name, a.since, a.proxy)
+            print(f"  -> +{got} 新增,最旧 {oldest}", flush=True)
         except Exception as e:
             print(f"  [error] {name}: {type(e).__name__}: {e}", flush=True)
         time.sleep(random.uniform(4, 8))   # 换股歇一下
