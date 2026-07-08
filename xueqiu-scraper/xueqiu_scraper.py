@@ -28,6 +28,8 @@ import sqlite3
 import argparse
 import datetime
 
+import requests
+
 # 目标股票(纯数字代码, 名称)—— 按需改这里
 STOCKS = [
     ("300301", "ST长方"), ("002816", "ST和科"), ("688646", "ST逸飞"),
@@ -234,6 +236,38 @@ def quick_test(code, since, proxy):
               f"   退路:①用登录后的雪球 cookie;②确认该股在雪球是否真有 2020 的帖(可能本就没有)。")
 
 
+API_URL = ("https://api.xueqiu.com/query/v1/symbol/search/status.json"
+           "?symbol={symbol}&count=20&source=all&sort=time&page={page}")
+
+
+def fetch_api(db, code, name, max_pages=60, delay=(1.0, 2.0)):
+    """API 模式:绕过 WAF(csrf 拿 token)取"前 ~1000 条"(雪球硬性上限)。
+    任意机器可跑(含云沙盒),无需浏览器。到不了 2020(平台限制),用于"先拿近期"。
+    """
+    symbol = prefix(code)
+    s = requests.Session()
+    s.headers.update({"User-Agent": UA, "Referer": f"https://xueqiu.com/S/{symbol}"})
+    s.get("https://xueqiu.com/service/csrf?api=/statuses/search.json", timeout=15)  # 拿 token
+    total, oldest = 0, ""
+    for page in range(1, max_pages + 1):
+        try:
+            d = s.get(API_URL.format(symbol=symbol, page=page), timeout=15).json()
+        except Exception as e:
+            print(f"  [{name}] 第{page}页 异常 {type(e).__name__},停"); break
+        lst = d.get("list") or []
+        if not lst:
+            break
+        rows = [parse_post(it, symbol, name) for it in lst]
+        total += save_rows(db, rows)
+        oldest = min((r["created_at"] for r in rows if r["created_at"]), default=oldest)
+        if page % 10 == 0 or page == 1:
+            print(f"  [{name}] 第{page}页 累计新{total} 最旧{oldest[:10]}", flush=True)
+        if page >= (d.get("maxPage") or max_pages):
+            break
+        time.sleep(random.uniform(*delay))
+    return total, oldest[:10]
+
+
 def export_csv(db_path, out_dir="data"):
     db = db_connect(db_path)
     os.makedirs(out_dir, exist_ok=True)
@@ -253,18 +287,24 @@ def main():
     ap.add_argument("--export", action="store_true", help="只导出 CSV")
     ap.add_argument("--test", metavar="CODE", default=None,
                     help="本地自测:先跑一只股票~90秒,看能否翻过2023到2020(强烈建议长跑前先跑)")
+    ap.add_argument("--api", action="store_true",
+                    help="API 模式:取前~1000条(雪球硬顶,到不了2020),任意机器可跑,无需浏览器")
     a = ap.parse_args()
 
     os.makedirs(os.path.dirname(a.db) or ".", exist_ok=True)
     if a.export:
-        export_csv(a.db); return
+        export_csv(a.db, os.path.dirname(a.db) or "data"); return
     if a.test:
         quick_test(a.test, a.since, a.proxy); return
     db = db_connect(a.db)
     for code, name in STOCKS:
-        print(f"== {name}({code}) 深爬到 {a.since} ==", flush=True)
         try:
-            got, oldest = scrape_stock(db, code, name, a.since, a.proxy)
+            if a.api:
+                print(f"== {name}({code}) API 取前~1000条 ==", flush=True)
+                got, oldest = fetch_api(db, code, name)
+            else:
+                print(f"== {name}({code}) 浏览器深爬到 {a.since} ==", flush=True)
+                got, oldest = scrape_stock(db, code, name, a.since, a.proxy)
             print(f"  -> +{got} 新增,最旧 {oldest}", flush=True)
         except Exception as e:
             print(f"  [error] {name}: {type(e).__name__}: {e}", flush=True)
