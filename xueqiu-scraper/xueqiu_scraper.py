@@ -268,14 +268,20 @@ def fetch_api(db, code, name, max_pages=60, delay=(1.0, 2.0)):
     return total, oldest[:10]
 
 
+# CSV 导出列顺序:导师定的重要字段(post_id/user_id/标题/正文/评论)排最前
+EXPORT_ORDER = ["post_id", "user_id", "author", "created_at", "title", "text",
+                "reply_count", "like_count", "retweet_count", "view_count",
+                "symbol", "stock_name", "source", "url", "truncated", "fav_count", "crawl_time"]
+
+
 def export_csv(db_path, out_dir="data"):
     db = db_connect(db_path)
     os.makedirs(out_dir, exist_ok=True)
     for symbol, name in db.execute("SELECT DISTINCT symbol, stock_name FROM posts").fetchall():
-        rows = db.execute(f"SELECT {','.join(COLS)} FROM posts WHERE symbol=? ORDER BY created_at",
+        rows = db.execute(f"SELECT {','.join(EXPORT_ORDER)} FROM posts WHERE symbol=? ORDER BY created_at",
                           (symbol,)).fetchall()
         with open(f"{out_dir}/xueqiu_{symbol}.csv", "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.writer(f); w.writerow(COLS); w.writerows(rows)
+            w = csv.writer(f); w.writerow(EXPORT_ORDER); w.writerows(rows)
         print(f"  导出 {name}({symbol}): {len(rows)} 条")
 
 
