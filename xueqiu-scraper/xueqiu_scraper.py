@@ -137,11 +137,13 @@ def _extract_lists(obj, bag):
             _extract_lists(v, bag)
 
 
-def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5)):
-    """浏览器抓取(最稳方式):打开个股讨论页过 WAF,**滚动页面触发无限加载**,
-    同时**拦截页面自己发出的所有 XHR 响应**,从中掏出帖子入库,直到回溯到 since。
-    这样不依赖猜某个接口——网页能滚到哪年,就抓到哪年。需本地/住宅 IP。
-    另外也顺带用时间线游标接口试翻(双保险)。
+def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5), headless=False):
+    """浏览器抓取(采用老师验证过的打法):
+      - **有头模式 headless=False + 反检测**(隐藏 navigator.webdriver、关自动化特征)→ 更稳地过 WAF;
+      - **页面内 page.evaluate + fetch()** 调"讨论时间线"接口(带完整会话态,比 page.request 更像真人);
+      - 用 max_id 游标一直往前翻;同时拦截页面自身 XHR 响应兜底。
+    仍是**按股票**(用网页无限滚动的 stock_timeline 接口,与被卡1000的搜索接口不同,有机会更深)。
+    需本地/住宅 IP;无显示器的服务器用有头模式需配 xvfb,或传 headless=True 试。
     """
     from playwright.sync_api import sync_playwright
     symbol = prefix(code)
@@ -158,14 +160,17 @@ def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5))
                 oldest_seen[0] = o
 
     with sync_playwright() as p:
-        launch = {"headless": True}
+        launch = {"headless": headless,
+                  "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]}
         if proxy:
             launch["proxy"] = {"server": proxy}
         browser = p.chromium.launch(**launch)
-        ctx = browser.new_context(user_agent=UA, ignore_https_errors=True)
+        ctx = browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 800},
+                                  ignore_https_errors=True)
+        ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")  # 反检测
         page = ctx.new_page()
 
-        # 拦截:任何 xueqiu 的帖子类 XHR 响应,都掏出列表入库
+        # 兜底:拦截页面自身发出的帖子类 XHR 响应
         def on_response(resp):
             u = resp.url
             if "xueqiu.com" in u and any(k in u for k in ("timeline", "search/status", "/statuses/")):
@@ -178,37 +183,36 @@ def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5))
                     pass
         page.on("response", on_response)
 
-        # 1) 打开个股讨论页,过 WAF
-        page.goto(f"https://xueqiu.com/S/{symbol}", wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(5000)
+        # 1) 打开个股讨论页,过 WAF(有头 + 反检测,停久一点让挑战跑完)
+        page.goto(f"https://xueqiu.com/S/{symbol}", timeout=60000)
+        page.wait_for_timeout(8000)
 
-        # 2) 一边用时间线游标接口翻(快),一边滚动页面(兜底);谁能往前走都收下
+        # 2) 页面内 fetch 时间线接口 + max_id 游标(老师的稳法);滚动兜底
         deadline = time.time() + max_minutes * 60
         max_id = oldest_id(db, symbol)
         stagnant = 0
         while time.time() < deadline:
-            before = total_new[0]
-            oldest_before = oldest_seen[0]
-            # (a) 游标接口
+            before, oldest_before = total_new[0], oldest_seen[0]
+            fetch_url = f"/statuses/stock_timeline.json?symbol_id={symbol}&count=20&source=all" + \
+                        (f"&max_id={max_id}" if max_id else "")
             try:
-                url = TIMELINE.format(symbol=symbol) + (f"&max_id={max_id}" if max_id else "")
-                d = page.request.get(url, headers={"Referer": f"https://xueqiu.com/S/{symbol}"}).json()
-                lst = d.get("list") or []
+                d = page.evaluate(
+                    "async (u) => { const r = await fetch(u, {headers:{'X-Requested-With':'XMLHttpRequest'}}); return await r.json(); }",
+                    fetch_url)
+                lst = (d or {}).get("list") or []
                 if lst:
                     ingest(lst)
                     max_id = lst[-1].get("id") or max_id
             except Exception:
                 pass
-            # (b) 滚动页面,触发它自己的无限加载(响应被 on_response 收走)
             try:
-                page.mouse.wheel(0, 24000)
+                page.mouse.wheel(0, 24000)   # 滚动兜底
             except Exception:
                 pass
             page.wait_for_timeout(int(random.uniform(*delay) * 1000))
             print(f"  [{name}] 累计新{total_new[0]} 最旧{oldest_seen[0][:10]}", flush=True)
             if oldest_seen[0] != "9999-99-99" and oldest_seen[0][:10] < since:
                 print(f"  [{name}] ✅ 已回溯到 {since},完成"); break
-            # 连续没有新数据 & 最旧没变早 → 到底/被限,停
             if total_new[0] == before and oldest_seen[0] == oldest_before:
                 stagnant += 1
                 if stagnant >= 6:
@@ -219,13 +223,13 @@ def scrape_stock(db, code, name, since, proxy, max_minutes=30, delay=(1.2, 2.5))
     return total_new[0], oldest_seen[0][:10]
 
 
-def quick_test(code, since, proxy):
+def quick_test(code, since, proxy, headless=False):
     """本地自测:对一只股票跑最多 90 秒,报告能回溯到哪天——用来先确认能不能到 2020。"""
     import tempfile
     name = dict(STOCKS).get(code, code)
     db = db_connect(os.path.join(tempfile.gettempdir(), "xq_test.db"))
     print(f"== 自测 {name}({code}):跑 ~90 秒看能回溯到哪天 ==")
-    new, oldest = scrape_stock(db, code, name, since, proxy, max_minutes=1.5)
+    new, oldest = scrape_stock(db, code, name, since, proxy, max_minutes=1.5, headless=headless)
     print(f"\n自测结果:{name} 采到 {new} 条,最旧 {oldest}")
     if oldest <= since:
         print(f"✅ 能翻过 {since} —— 这套可以爬到 2020,放心长跑。")
@@ -295,13 +299,15 @@ def main():
                     help="本地自测:先跑一只股票~90秒,看能否翻过2023到2020(强烈建议长跑前先跑)")
     ap.add_argument("--api", action="store_true",
                     help="API 模式:取前~1000条(雪球硬顶,到不了2020),任意机器可跑,无需浏览器")
+    ap.add_argument("--headless", action="store_true",
+                    help="浏览器无头模式(默认有头,更易过WAF;无显示器服务器可配xvfb或用此开关试)")
     a = ap.parse_args()
 
     os.makedirs(os.path.dirname(a.db) or ".", exist_ok=True)
     if a.export:
         export_csv(a.db, os.path.dirname(a.db) or "data"); return
     if a.test:
-        quick_test(a.test, a.since, a.proxy); return
+        quick_test(a.test, a.since, a.proxy, headless=a.headless); return
     db = db_connect(a.db)
     for code, name in STOCKS:
         try:
@@ -310,7 +316,7 @@ def main():
                 got, oldest = fetch_api(db, code, name)
             else:
                 print(f"== {name}({code}) 浏览器深爬到 {a.since} ==", flush=True)
-                got, oldest = scrape_stock(db, code, name, a.since, a.proxy)
+                got, oldest = scrape_stock(db, code, name, a.since, a.proxy, headless=a.headless)
             print(f"  -> +{got} 新增,最旧 {oldest}", flush=True)
         except Exception as e:
             print(f"  [error] {name}: {type(e).__name__}: {e}", flush=True)

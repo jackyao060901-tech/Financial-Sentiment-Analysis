@@ -125,3 +125,19 @@ cloudflared tunnel --url http://localhost:8000   # 或 cloudflared
 - **别在云服务器/机房 IP 跑**:WAF 更爱挑战、更易被封。用住宅宽带。
 - **控制频率**:代码已内置 1.5–3s 拟人间隔;别改太快,雪球对高频敏感。
 - **合规**:数据仅用于研究/课程用途。
+
+---
+
+## 八、备忘:两个方向的技术记录
+
+**(A) 已采用老师验证过的浏览器打法**(`scrape_stock`):
+- 有头模式 `headless=False` + 反检测(隐藏 `navigator.webdriver`、`--disable-blink-features=AutomationControlled`);
+- **页面内 `page.evaluate` + `fetch()`** 调接口(带完整会话态,比 `page.request` 更稳);
+- 仍按股票,用网页无限滚动的 `stock_timeline` 接口 + `max_id` 游标(与被卡 1000 的搜索接口不同,有机会更深)。
+
+**(B) "按用户"方案(记下,暂不做)**:
+- 老师 `guba-scraper/xueqiu_scraper.py` 的思路:调 `/v4/statuses/user_timeline.json?user_id=X&page=N`,
+  **这个接口不卡 1000**(可翻数百页到很早),适合"抓某个大V的全部帖"。
+- 但它是**按用户**、不是按股票;想用它补某股票到 2020,需先找出该股的高频用户再逐个拉、按 `$股票$` 标记筛,
+  且**只能覆盖现役用户**(2020 发过、现在不发的人找不到)→ 补不全。**故暂缓,先按股票。**
+- 实测:该接口在沙盒里第 1 页能取、第 2 页起报错(深翻需浏览器会话态);本地浏览器可行。
